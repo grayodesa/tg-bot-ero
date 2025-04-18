@@ -21,7 +21,7 @@ from telegram import Update, Bot
 from telegram.error import TelegramError
 
 import openai
-from nudenet import NudeClassifier
+import nudenet
 import asyncpg
 
 from config import config
@@ -33,9 +33,9 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI
 app = FastAPI()
 
-# Initialize Telegram Bot and NudeClassifier
+# Initialize Telegram Bot; classifier will be loaded on first use
 bot = Bot(token=config.TG_TOKEN)
-classifier = NudeClassifier()
+classifier = None
 
 # Security dependency
 security = HTTPBearer()
@@ -59,12 +59,27 @@ def verify_jwt(credentials: HTTPAuthorizationCredentials = Depends(security)):
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token format or signature")
 
+import asyncio
+
 @app.on_event("startup")
 async def on_startup():
     # Configure OpenAI
     openai.api_key = config.OPENAI_KEY
-    # Connect to PostgreSQL
-    app.state.db = await asyncpg.create_pool(dsn=config.POSTGRES_DSN)
+    # Connect to PostgreSQL with retries
+    pool = None
+    last_error = None
+    for _ in range(10):
+        try:
+            pool = await asyncpg.create_pool(dsn=config.POSTGRES_DSN)
+            break
+        except Exception as e:
+            last_error = e
+            logger.warning("Database connection failed, retrying: %s", e)
+            await asyncio.sleep(2)
+    if pool is None:
+        logger.error("Could not connect to database after retries: %s", last_error)
+        raise last_error
+    app.state.db = pool
     # Ensure logs table exists
     await app.state.db.execute(
         """
@@ -123,6 +138,10 @@ async def webhook(request: Request):
             tg_file = await bot.get_file(file_id)
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 await tg_file.download_to_drive(tmp.name)
+                # Lazy-load NudeClassifier to avoid heavy import at startup
+                global classifier
+                if classifier is None:
+                    classifier = nudenet.NudeClassifier()
                 result = classifier.classify(tmp.name)
                 avatar_unsafe = result.get(tmp.name, {}).get("unsafe", 0) > 0.7
     except Exception as e:
