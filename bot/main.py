@@ -138,11 +138,24 @@ async def webhook(request: Request):
             tg_file = await bot.get_file(file_id)
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 await tg_file.download_to_drive(tmp.name)
-                # Lazy-load NudeClassifier to avoid heavy import at startup
+                # Lazy-load NudeClassifier
                 global classifier
                 if classifier is None:
                     classifier = nudenet.NudeClassifier()
-                result = classifier.classify(tmp.name)
+                # Attempt classification, with fallback on corrupted model
+                try:
+                    result = classifier.classify(tmp.name)
+                except Exception as e:
+                    logger.warning("Classifier load failed, re-downloading model: %s", e)
+                    # Remove potentially corrupted model file and retry
+                    model_file = os.path.expanduser("~/.NudeNet/classifier_model.onnx")
+                    try:
+                        os.remove(model_file)
+                        logger.info("Removed corrupted NudeNet model file: %s", model_file)
+                    except OSError:
+                        pass
+                    classifier = nudenet.NudeClassifier()
+                    result = classifier.classify(tmp.name)
                 avatar_unsafe = result.get(tmp.name, {}).get("unsafe", 0) > 0.7
     except Exception as e:
         logger.warning("Avatar check failed: %s", e)
