@@ -96,6 +96,16 @@ async def on_startup():
         );
         """
     )
+    # Ensure pending-first-message table exists
+    await app.state.db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pending_first (
+            chat_id BIGINT,
+            user_id BIGINT,
+            PRIMARY KEY (chat_id, user_id)
+        );
+        """
+    )
 
 @app.on_event("shutdown")
 async def on_shutdown():
@@ -114,12 +124,36 @@ async def webhook(request: Request):
         raise HTTPException(status_code=400, detail="Invalid update payload")
 
     message = update.message
+    # Handle new chat members: mark for first-message check
+    if message and message.new_chat_members:
+        for new_member in message.new_chat_members:
+            try:
+                await app.state.db.execute(
+                    "INSERT INTO pending_first(chat_id, user_id) VALUES($1, $2) ON CONFLICT DO NOTHING",  
+                    message.chat.id, new_member.id
+                )
+            except Exception:
+                logger.warning("Failed to mark new member for first-message: chat=%s user=%s",
+                               message.chat.id, new_member.id)
+        return JSONResponse({"ok": True})
+    # Only process the first message per user after joining
     if not message or not message.text:
         return JSONResponse({"ok": True})
-
     user = message.from_user
     chat = message.chat
+    # Check pending-first flag
+    pending = await app.state.db.fetchval(
+        "SELECT 1 FROM pending_first WHERE chat_id=$1 AND user_id=$2", chat.id, user.id
+    )
+    if not pending:
+        # Not a first message after join: skip
+        return JSONResponse({"ok": True})
+    # Clear pending flag so we only check once
+    await app.state.db.execute(
+        "DELETE FROM pending_first WHERE chat_id=$1 AND user_id=$2", chat.id, user.id
+    )
     msg_text = message.text
+
 
     # Feature: link in bio
     try:
