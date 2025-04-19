@@ -20,7 +20,7 @@ import telegram
 from telegram import Update, Bot
 from telegram.error import TelegramError
 
-import openai
+from openai import OpenAI
 import nudenet
 import asyncpg
 
@@ -63,8 +63,8 @@ import asyncio
 
 @app.on_event("startup")
 async def on_startup():
-    # Configure OpenAI
-    openai.api_key = config.OPENAI_KEY
+    # Initialize OpenAI client
+    app.state.openai_client = OpenAI(api_key=config.OPENAI_KEY)
     # Connect to PostgreSQL with retries
     pool = None
     last_error = None
@@ -214,7 +214,7 @@ async def webhook(request: Request):
     )
     start = time.time()
     try:
-        response = await openai.ChatCompletion.acreate(
+        response = await app.state.openai_client.chat.completions.create(
             model=config.OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
