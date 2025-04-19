@@ -195,7 +195,7 @@ async def webhook(request: Request):
         logger.warning("Avatar check failed: %s", e)
 
     # If not both features, skip LLM
-    if not (link_in_bio and avatar_unsafe):
+    if not (link_in_bio or avatar_unsafe):
         await app.state.db.execute(
             """
             INSERT INTO logs(user_id, chat_id, msg_text, link_in_bio, avatar_unsafe, llm_result, latency_ms)
