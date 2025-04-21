@@ -10,7 +10,7 @@ python = ">=3.12,<3.13"
 python-telegram-bot = "^22.0"
 fastapi = "^0.111.0"
 uvicorn = {extras = ["standard"], version = "^0.29.0"}
-nudenet = "^2.0.1"
+nudenet = "^3.0.0"
 pillow = "^10.3.0"
 opencv-python = "^4.10.0.82"
 openai = "^1.25.0"

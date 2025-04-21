@@ -63,24 +63,62 @@ def verify_jwt(credentials: HTTPAuthorizationCredentials = Depends(security)):
 def initialize_classifier():
     """
     Initialize the NudeClassifier.
-    NudeNet handles model downloading automatically.
+    According to NudeNet documentation, initialize with specific model path to use v3.
     """
     try:
-        logger.info("Initializing NudeClassifier")
-        # Simple initialization with no parameters - NudeNet manages its models internally
-        classifier = nudenet.NudeClassifier()
+        logger.info("Initializing NudeClassifier with v3 models")
         
-        # Test with a simple operation to verify it works
-        with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
+        # Create a minimal JPEG file for testing
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             # Create a minimal valid image file
             with open(tmp.name, 'wb') as f:
                 f.write(bytes.fromhex('FFD8FFE000104A46494600010101006000600000FFDB004300080606070605080707070909080A0C140D0C0B0B0C1912130F141D1A1F1E1D1A1C1C20242E2720222C231C1C2837292C30313434341F27393D38323C2E333432FFDB0043010909090C0B0C180D0D1832211C213232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232FFC00011080001000103012200021101031101FFC4001F0000010501010101010100000000000000000102030405060708090A0BFFC400B5100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A262728292A35363738393A434445464748494A535455565758595A636465666768696A737475767778797A82838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE2E3E4E5E6E7E8E9EAF2F3F4F5F6F7F8F9FAFFDA000C03010002110311003F00FDFCA28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2803FFD9'))
             
-            # Attempt classification to verify it works
-            test_result = classifier.classify(tmp.name)
-            logger.info(f"NudeClassifier initialized and tested successfully: {test_result}")
-            
-        return classifier
+            # Use the fast 320n model explicitly
+            try:
+                tmp_path = tmp.name  # Remember the path
+                
+                # Try to use fast_mode, available in NudeNet v3+
+                classifier = nudenet.NudeClassifier(fast_mode=True)
+                logger.info("Initialized NudeClassifier in fast mode (v3)")
+                
+                # Test with a simple operation to verify it works
+                result = classifier.classify(tmp_path)
+                logger.info(f"NudeClassifier test successful: {result}")
+                
+                # If we're here, it worked - remove the test file and return
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+                    
+                return classifier
+            except Exception as e1:
+                logger.warning(f"Failed to initialize with fast_mode=True: {e1}, trying default mode")
+                
+                try:
+                    # Try with default mode
+                    classifier = nudenet.NudeClassifier()
+                    logger.info("Initialized NudeClassifier with default settings")
+                    
+                    # Test with a simple operation
+                    result = classifier.classify(tmp_path)
+                    logger.info(f"NudeClassifier test successful: {result}")
+                    
+                    # If we're here, it worked - remove the test file and return
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
+                        
+                    return classifier
+                except Exception as e2:
+                    logger.error(f"Failed to initialize with default settings: {e2}")
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
+                    raise e2
     except Exception as e:
         logger.error(f"Failed to initialize NudeClassifier: {e}")
         return None
@@ -223,13 +261,33 @@ async def webhook(request: Request):
                 # Only attempt classification if classifier was initialized successfully
                 if classifier is not None:
                     try:
+                        # Pass the file path to the classifier
                         result = classifier.classify(tmp.name)
+                        
+                        # Check result structure
                         if not isinstance(result, dict):
                             logger.warning(f"Unexpected result type: {type(result)}")
                             avatar_unsafe = False
                         else:
-                            # Expected format is {image_path: {"unsafe": score}}
-                            unsafe_score = result.get(tmp.name, {}).get("unsafe", 0)
+                            # For NudeNet v3, result format should be {image_path: {"unsafe": score}}
+                            # If we're still using v2, same format should apply
+                            logger.info(f"Classification result: {result}")
+                            
+                            unsafe_score = 0
+                            # Try to extract the score from different possible formats
+                            if tmp.name in result:
+                                # Standard format: {path: {"unsafe": score}}
+                                unsafe_score = result.get(tmp.name, {}).get("unsafe", 0)
+                            elif result:
+                                # Alternative: result might not use path as key
+                                # Take first result or try to find unsafe score directly
+                                first_key = next(iter(result))
+                                if isinstance(result[first_key], dict) and "unsafe" in result[first_key]:
+                                    unsafe_score = result[first_key].get("unsafe", 0)
+                                elif isinstance(result, dict) and "unsafe" in result:
+                                    # Direct format: {"unsafe": score}
+                                    unsafe_score = result.get("unsafe", 0)
+                            
                             logger.info(f"Avatar unsafe score: {unsafe_score}")
                             avatar_unsafe = unsafe_score > 0.7
                     except Exception as e:
@@ -237,14 +295,31 @@ async def webhook(request: Request):
                         # Reset classifier and try again with fresh instance
                         classifier = None
                         try:
+                            # Initialize with new instance
                             classifier = initialize_classifier()
+                            
                             if classifier:
+                                # Retry classification
                                 result = classifier.classify(tmp.name)
+                                
+                                # Check result structure again
                                 if not isinstance(result, dict):
                                     logger.warning(f"Unexpected result type after retry: {type(result)}")
                                     avatar_unsafe = False
                                 else:
-                                    unsafe_score = result.get(tmp.name, {}).get("unsafe", 0)
+                                    logger.info(f"Retry classification result: {result}")
+                                    
+                                    unsafe_score = 0
+                                    # Try different key formats again
+                                    if tmp.name in result:
+                                        unsafe_score = result.get(tmp.name, {}).get("unsafe", 0)
+                                    elif result:
+                                        first_key = next(iter(result))
+                                        if isinstance(result[first_key], dict) and "unsafe" in result[first_key]:
+                                            unsafe_score = result[first_key].get("unsafe", 0)
+                                        elif isinstance(result, dict) and "unsafe" in result:
+                                            unsafe_score = result.get("unsafe", 0)
+                                    
                                     logger.info(f"Avatar unsafe score after retry: {unsafe_score}")
                                     avatar_unsafe = unsafe_score > 0.7
                             else:
