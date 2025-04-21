@@ -7,3 +7,4 @@ __pypackages__/
 *.db
 *.log
 venv/
+simple_fix.py
