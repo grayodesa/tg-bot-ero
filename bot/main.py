@@ -9,7 +9,6 @@ import hmac
 import hashlib
 import json
 import base64
-import requests
 import logging
 
 from fastapi import FastAPI, Request, HTTPException, Depends
@@ -61,105 +60,31 @@ def verify_jwt(credentials: HTTPAuthorizationCredentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Invalid token format or signature")
 
 
-def ensure_valid_nudenet_model():
-    '''Ensures the NudeNet model is valid and redownloads if necessary.'''
-    model_dir = os.path.expanduser("~/.NudeNet")
-    model_path = os.path.join(model_dir, "classifier_model.onnx")
-    
-    # Create directory if it doesn't exist
-    os.makedirs(model_dir, exist_ok=True)
-    
-    # Check if model exists and try to validate it
-    valid_model = False
-    if os.path.exists(model_path):
-        try:
-            # Try loading the model to see if it's valid
-            tmp_classifier = nudenet.NudeClassifier()
-            # Test with a simple operation
-            with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
-                # Create a minimal valid image file
-                with open(tmp.name, 'wb') as f:
-                    f.write(bytes.fromhex('FFD8FFE000104A46494600010101006000600000FFDB004300080606070605080707070909080A0C140D0C0B0B0C1912130F141D1A1F1E1D1A1C1C20242E2720222C231C1C2837292C30313434341F27393D38323C2E333432FFDB0043010909090C0B0C180D0D1832211C213232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232FFC00011080001000103012200021101031101FFC4001F0000010501010101010100000000000000000102030405060708090A0BFFC400B5100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FAFFC4001F0100030101010101010101010000000000000102030405060708090A0BFFC400B51100020102040403040705040400010277000102031104052131061241510761711322328108144291A1B1C109233352F0156272D10A162434E125F11718191A262728292A35363738393A434445464748494A535455565758595A636465666768696A737475767778797A82838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE2E3E4E5E6E7E8E9EAF2F3F4F5F6F7F8F9FAFFDA000C03010002110311003F00FDFCA28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2803FFD9'))
-                # Try to classify this dummy image
-                test_result = tmp_classifier.classify(tmp.name)
-                # If we get here without error, the model is valid
-                valid_model = True
-                logger.info("NudeNet model validated successfully")
-        except Exception as e:
-            logger.warning(f"NudeNet model validation failed: {e}")
-            # Delete the invalid model file
-            try:
-                os.remove(model_path)
-                logger.info(f"Removed invalid NudeNet model file: {model_path}")
-            except OSError as ose:
-                logger.warning(f"Could not remove invalid model file: {ose}")
-    
-    # If model doesn't exist or is invalid, download it
-    if not valid_model:
-        try:
-            # Direct download from GitHub release with proper headers to prevent redirect to login
-            model_url = "https://github.com/notAI-tech/NudeNet/releases/download/v0/classifier_model.onnx"
-            logger.info(f"Downloading NudeNet model from {model_url}")
+def initialize_classifier():
+    """
+    Initialize the NudeClassifier.
+    NudeNet handles model downloading automatically.
+    """
+    try:
+        logger.info("Initializing NudeClassifier")
+        # Simple initialization with no parameters - NudeNet manages its models internally
+        classifier = nudenet.NudeClassifier()
+        
+        # Test with a simple operation to verify it works
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
+            # Create a minimal valid image file
+            with open(tmp.name, 'wb') as f:
+                f.write(bytes.fromhex('FFD8FFE000104A46494600010101006000600000FFDB004300080606070605080707070909080A0C140D0C0B0B0C1912130F141D1A1F1E1D1A1C1C20242E2720222C231C1C2837292C30313434341F27393D38323C2E333432FFDB0043010909090C0B0C180D0D1832211C213232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232FFC00011080001000103012200021101031101FFC4001F0000010501010101010100000000000000000102030405060708090A0BFFC400B5100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A262728292A35363738393A434445464748494A535455565758595A636465666768696A737475767778797A82838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE2E3E4E5E6E7E8E9EAF2F3F4F5F6F7F8F9FAFFDA000C03010002110311003F00FDFCA28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2803FFD9'))
             
-            # Add headers to avoid login page redirect - mimic browser request
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'application/octet-stream'
-            }
+            # Attempt classification to verify it works
+            test_result = classifier.classify(tmp.name)
+            logger.info(f"NudeClassifier initialized and tested successfully: {test_result}")
             
-            response = requests.get(model_url, stream=True, headers=headers)
-            response.raise_for_status()  # Raise an error for bad status codes
-            
-            # Check content type to ensure it's not HTML
-            content_type = response.headers.get('Content-Type', '')
-            if 'text/html' in content_type or 'text' in content_type:
-                logger.error(f"Received HTML instead of model file. GitHub may require authentication.")
-                # Try alternate source as fallback - NudeNet package uses this internally
-                model_url = "https://notai-public.s3.amazonaws.com/nudenet/classifier_model.onnx"
-                logger.info(f"Trying alternate source: {model_url}")
-                response = requests.get(model_url, stream=True)
-                response.raise_for_status()
-            
-            # Save the model
-            with open(model_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            # Verify model size
-            file_size = os.path.getsize(model_path)
-            if file_size < 1000000:  # ONNX models should be several megabytes
-                logger.warning(f"Downloaded file too small ({file_size} bytes), may not be a valid model")
-                try:
-                    # Check if it's HTML content
-                    with open(model_path, 'rb') as f:
-                        content = f.read(500)  # Read first 500 bytes
-                        if b'<!DOCTYPE html>' in content or b'<html' in content:
-                            logger.error("Downloaded file is HTML, not a model file")
-                            raise ValueError("Downloaded HTML instead of model file")
-                except Exception:
-                    pass
-                    
-            logger.info(f"Successfully downloaded NudeNet model to {model_path}")
-            
-            # Try to validate the downloaded model
-            try:
-                tmp_classifier = nudenet.NudeClassifier()
-                with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
-                    # Create a minimal valid image
-                    with open(tmp.name, 'wb') as f:
-                        f.write(bytes.fromhex('FFD8FFE000104A46494600010101006000600000FFDB004300080606070605080707070909080A0C140D0C0B0B0C1912130F141D1A1F1E1D1A1C1C20242E2720222C231C1C2837292C30313434341F27393D38323C2E333432FFDB0043010909090C0B0C180D0D1832211C213232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232FFC00011080001000103012200021101031101FFC4001F0000010501010101010100000000000000000102030405060708090A0BFFC400B5100002010303020403050504040000017D01020300041105122131410613516107227114328191A1082342B1C11552D1F02433627282090A161718191A25262728292A3435363738393A434445464748494A535455565758595A636465666768696A737475767778797A838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE1E2E3E4E5E6E7E8E9EAF1F2F3F4F5F6F7F8F9FAFFC4001F0100030101010101010101010000000000000102030405060708090A0BFFC400B51100020102040403040705040400010277000102031104052131061241510761711322328108144291A1B1C109233352F0156272D10A162434E125F11718191A25262728292A35363738393A434445464748494A535455565758595A636465666768696A737475767778797A82838485868788898A92939495969798999AA2A3A4A5A6A7A8A9AAB2B3B4B5B6B7B8B9BAC2C3C4C5C6C7C8C9CAD2D3D4D5D6D7D8D9DAE2E3E4E5E6E7E8E9EAF2F3F4F5F6F7F8F9FAFFDA000C03010002110311003F00FDFCA28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2800A28A2803FFD9'))
-                    test_result = tmp_classifier.classify(tmp.name)
-                logger.info("Model validation successful after download")
-            except Exception as e:
-                logger.warning(f"Model validation after download failed: {e}")
-                # Don't return False here, still try to use the model
-            
-            return True
-        except Exception as e:
-            logger.error(f"Failed to download NudeNet model: {e}")
-            return False
-    
-    return True
+        return classifier
+    except Exception as e:
+        logger.error(f"Failed to initialize NudeClassifier: {e}")
+        return None
+
 
 import asyncio
 
@@ -168,16 +93,17 @@ async def on_startup():
     # Initialize OpenAI client
     app.state.openai_client = OpenAI(api_key=config.OPENAI_KEY)
     
-    # Pre-validate NudeNet model to avoid issues during request processing
+    # Pre-initialize NudeNet classifier to avoid issues during request processing
     try:
-        logger.info("Pre-validating NudeNet model on startup")
-        model_valid = ensure_valid_nudenet_model()
-        if model_valid:
-            logger.info("NudeNet model validation successful")
+        logger.info("Pre-initializing NudeNet classifier on startup")
+        global classifier
+        classifier = initialize_classifier()
+        if classifier:
+            logger.info("NudeNet classifier successfully initialized")
         else:
-            logger.warning("NudeNet model validation failed - will retry when needed")
+            logger.warning("NudeNet classifier initialization failed - will retry when needed")
     except Exception as e:
-        logger.error(f"Error during NudeNet model validation: {e}")
+        logger.error(f"Error during NudeNet classifier initialization: {e}")
     
     # Connect to PostgreSQL with retries
     pool = None
@@ -286,56 +212,47 @@ async def webhook(request: Request):
             tg_file = await bot.get_file(file_id)
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 await tg_file.download_to_drive(tmp.name)
+                
                 # Lazy-load NudeClassifier
                 global classifier
-                if classifier is None:
-                    # Ensure model is valid before initializing
-                    if ensure_valid_nudenet_model():
-                        try:
-                            classifier = nudenet.NudeClassifier()
-                        except Exception as e:
-                            logger.error(f"Cannot initialize NudeClassifier: {e}")
-                            # Continue without classification - better than crashing
-                            avatar_unsafe = False
-                            break
-                    else:
-                        logger.error("Cannot initialize NudeClassifier due to model issues")
-                        # Continue without classification - better than crashing
-                        avatar_unsafe = False
-                        break
                 
-                # Attempt classification
-                try:
-                    result = classifier.classify(tmp.name)
-                    if not isinstance(result, dict):
-                        logger.warning(f"Unexpected result type: {type(result)}")
-                        avatar_unsafe = False
-                    else:
-                        # Expected format is {image_path: {"unsafe": score}}
-                        unsafe_score = result.get(tmp.name, {}).get("unsafe", 0)
-                        logger.info(f"Avatar unsafe score: {unsafe_score}")
-                        avatar_unsafe = unsafe_score > 0.7
-                except Exception as e:
-                    logger.warning(f"Classification failed: {e}")
-                    # Reset classifier and try again with fresh model
-                    classifier = None
+                # Initialize if not already done
+                if classifier is None:
+                    classifier = initialize_classifier()
+                
+                # Only attempt classification if classifier was initialized successfully
+                if classifier is not None:
                     try:
-                        if ensure_valid_nudenet_model():
-                            classifier = nudenet.NudeClassifier()
-                            result = classifier.classify(tmp.name)
-                            if not isinstance(result, dict):
-                                logger.warning(f"Unexpected result type after retry: {type(result)}")
-                                avatar_unsafe = False
-                            else:
-                                unsafe_score = result.get(tmp.name, {}).get("unsafe", 0)
-                                logger.info(f"Avatar unsafe score after retry: {unsafe_score}")
-                                avatar_unsafe = unsafe_score > 0.7
-                        else:
-                            logger.error("Failed to recover NudeNet classifier")
+                        result = classifier.classify(tmp.name)
+                        if not isinstance(result, dict):
+                            logger.warning(f"Unexpected result type: {type(result)}")
                             avatar_unsafe = False
-                    except Exception as retry_e:
-                        logger.error(f"Classification retry failed: {retry_e}")
-                        avatar_unsafe = False
+                        else:
+                            # Expected format is {image_path: {"unsafe": score}}
+                            unsafe_score = result.get(tmp.name, {}).get("unsafe", 0)
+                            logger.info(f"Avatar unsafe score: {unsafe_score}")
+                            avatar_unsafe = unsafe_score > 0.7
+                    except Exception as e:
+                        logger.warning(f"Classification failed: {e}")
+                        # Reset classifier and try again with fresh instance
+                        classifier = None
+                        try:
+                            classifier = initialize_classifier()
+                            if classifier:
+                                result = classifier.classify(tmp.name)
+                                if not isinstance(result, dict):
+                                    logger.warning(f"Unexpected result type after retry: {type(result)}")
+                                    avatar_unsafe = False
+                                else:
+                                    unsafe_score = result.get(tmp.name, {}).get("unsafe", 0)
+                                    logger.info(f"Avatar unsafe score after retry: {unsafe_score}")
+                                    avatar_unsafe = unsafe_score > 0.7
+                            else:
+                                logger.error("Failed to recover NudeNet classifier")
+                                avatar_unsafe = False
+                        except Exception as retry_e:
+                            logger.error(f"Classification retry failed: {retry_e}")
+                            avatar_unsafe = False
     except Exception as e:
         logger.warning(f"Avatar check failed: {e}")
 
