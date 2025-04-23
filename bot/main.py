@@ -116,7 +116,7 @@ async def on_startup():
         logger.error("Could not connect to database after retries: %s", last_error)
         raise last_error
     app.state.db = pool
-    # Ensure logs table exists
+    # Ensure logs table exists and has all required columns
     await app.state.db.execute(
         """
         CREATE TABLE IF NOT EXISTS logs (
@@ -127,12 +127,23 @@ async def on_startup():
             msg_text TEXT,
             link_in_bio BOOLEAN,
             avatar_unsafe BOOLEAN,
-            avatar_suspicious BOOLEAN,
             llm_result INT,
             latency_ms INT
         );
         """
     )
+    
+    # Check if avatar_suspicious column exists, add it if not
+    try:
+        await app.state.db.execute(
+            """
+            ALTER TABLE logs 
+            ADD COLUMN IF NOT EXISTS avatar_suspicious BOOLEAN DEFAULT FALSE;
+            """
+        )
+        logger.info("Ensured avatar_suspicious column exists in logs table")
+    except Exception as e:
+        logger.error(f"Failed to add avatar_suspicious column: {e}")
     # Ensure pending-first-message table exists
     await app.state.db.execute(
         """
