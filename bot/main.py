@@ -127,6 +127,7 @@ async def on_startup():
             msg_text TEXT,
             link_in_bio BOOLEAN,
             avatar_unsafe BOOLEAN,
+            avatar_suspicious BOOLEAN,
             llm_result INT,
             latency_ms INT
         );
@@ -199,8 +200,10 @@ async def webhook(request: Request):
         bio = ""
     link_in_bio = bool(re.search(r"https?://|t\\.me/", bio))
 
-    # Feature: avatar unsafe
+    # Feature: avatar unsafe/suspicious check
     avatar_unsafe = False
+    avatar_suspicious = False
+    avatar_file_path = None
     try:
         photos = await bot.get_user_profile_photos(user.id, limit=1)
         if photos.total_count > 0:
@@ -208,6 +211,7 @@ async def webhook(request: Request):
             tg_file = await bot.get_file(file_id)
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                 await tg_file.download_to_drive(tmp.name)
+                avatar_file_path = tmp.name
                 
                 # Lazy-load NudeDetector
                 global detector
@@ -235,6 +239,7 @@ async def webhook(request: Request):
                         # Each detection is a dict with 'class' and 'score' keys
                         has_explicit_content = False
                         high_confidence_explicit = False
+                        has_low_confidence_explicit = False  # Track lower threshold detections
                         
                         # Go through the detections and check for explicit content classes
                         explicit_classes = ['EXPOSED_ANUS', 'EXPOSED_ARMPITS', 'COVERED_BELLY', 
@@ -242,23 +247,45 @@ async def webhook(request: Request):
                                            'EXPOSED_BREAST_F', 'COVERED_BREAST_F', 'EXPOSED_GENITALIA_F', 
                                            'EXPOSED_GENITALIA_M', 'EXPOSED_BREAST_M', 'EXPOSED_FEET']
                         
+                        suspicious_classes = ['FEMALE_FACE', 'MALE_FACE', 'FACE_F', 'FACE_M']
+                        has_face = False  # Track if the image has a face
+                        
                         for detection in detections:
                             logger.info(f"Detection: {detection}")
                             if isinstance(detection, dict) and 'class' in detection and 'score' in detection:
+                                # Check for faces with good confidence
+                                if detection['class'] in suspicious_classes and detection['score'] > 0.7:
+                                    has_face = True
+                                    logger.info(f"Face detected: {detection}")
+                                
+                                # Check for explicit content with high confidence
                                 if detection['class'] in explicit_classes and detection['score'] > 0.7:
                                     high_confidence_explicit = True
                                     logger.info(f"High confidence explicit content found: {detection}")
                                     break
+                                # Check for explicit content with medium confidence    
                                 elif detection['class'] in explicit_classes and detection['score'] > 0.5:
                                     has_explicit_content = True
                                     logger.info(f"Lower confidence explicit content found: {detection}")
+                                # Check for explicit content with low confidence
+                                elif detection['class'] in explicit_classes and detection['score'] > 0.3:
+                                    has_low_confidence_explicit = True
+                                    logger.info(f"Low confidence explicit content found: {detection}")
+                                # Also check for specific class names that might have different formats
+                                elif detection['class'] in ['FEMALE_BREAST_COVERED', 'ARMPITS_EXPOSED'] and detection['score'] > 0.3:
+                                    has_low_confidence_explicit = True
+                                    logger.info(f"Specific class low confidence explicit content found: {detection}")
                             else:
                                 logger.warning(f"Unexpected detection format: {detection}")
                         
                         # If we have high confidence detection or multiple lower confidence detections
                         avatar_unsafe = high_confidence_explicit or has_explicit_content
                         
-                        logger.info(f"Avatar unsafe: {avatar_unsafe}, high confidence: {high_confidence_explicit}")
+                        # Consider an avatar suspicious if it has a face + low confidence detection
+                        # This is the new condition that will trigger LLM verification
+                        avatar_suspicious = has_face and has_low_confidence_explicit and not avatar_unsafe
+                        
+                        logger.info(f"Avatar analysis: unsafe={avatar_unsafe}, suspicious={avatar_suspicious}, high_confidence={high_confidence_explicit}")
                         
                     except Exception as e:
                         logger.warning(f"Detection failed: {e}")
@@ -283,6 +310,8 @@ async def webhook(request: Request):
                                 # Check if we have explicit content again
                                 has_explicit_content = False
                                 high_confidence_explicit = False
+                                has_low_confidence_explicit = False
+                                has_face = False
                                 
                                 # Same explicit classes as before
                                 explicit_classes = ['EXPOSED_ANUS', 'EXPOSED_ARMPITS', 'COVERED_BELLY', 
@@ -290,9 +319,17 @@ async def webhook(request: Request):
                                                   'EXPOSED_BREAST_F', 'COVERED_BREAST_F', 'EXPOSED_GENITALIA_F', 
                                                   'EXPOSED_GENITALIA_M', 'EXPOSED_BREAST_M', 'EXPOSED_FEET']
                                 
+                                suspicious_classes = ['FEMALE_FACE', 'MALE_FACE', 'FACE_F', 'FACE_M']
+                                
                                 for detection in detections:
                                     logger.info(f"Retry detection: {detection}")
                                     if isinstance(detection, dict) and 'class' in detection and 'score' in detection:
+                                        # Check for faces with good confidence
+                                        if detection['class'] in suspicious_classes and detection['score'] > 0.7:
+                                            has_face = True
+                                            logger.info(f"Retry: Face detected: {detection}")
+                                        
+                                        # Check for explicit content with various confidence levels
                                         if detection['class'] in explicit_classes and detection['score'] > 0.7:
                                             high_confidence_explicit = True
                                             logger.info(f"Retry: High confidence explicit content found: {detection}")
@@ -300,36 +337,49 @@ async def webhook(request: Request):
                                         elif detection['class'] in explicit_classes and detection['score'] > 0.5:
                                             has_explicit_content = True
                                             logger.info(f"Retry: Lower confidence explicit content found: {detection}")
+                                        elif detection['class'] in explicit_classes and detection['score'] > 0.3:
+                                            has_low_confidence_explicit = True
+                                            logger.info(f"Retry: Low confidence explicit content found: {detection}")
+                                        # Also check for specific class names that might have different formats
+                                        elif detection['class'] in ['FEMALE_BREAST_COVERED', 'ARMPITS_EXPOSED'] and detection['score'] > 0.3:
+                                            has_low_confidence_explicit = True
+                                            logger.info(f"Retry: Specific class low confidence explicit content found: {detection}")
                                     else:
                                         logger.warning(f"Retry: Unexpected detection format: {detection}")
                                 
                                 # Set avatar_unsafe based on detections
                                 avatar_unsafe = high_confidence_explicit or has_explicit_content
                                 
-                                logger.info(f"Avatar unsafe after retry: {avatar_unsafe}, high confidence: {high_confidence_explicit}")
+                                # Set avatar_suspicious based on detections
+                                avatar_suspicious = has_face and has_low_confidence_explicit and not avatar_unsafe
+                                
+                                logger.info(f"Avatar analysis after retry: unsafe={avatar_unsafe}, suspicious={avatar_suspicious}, high_confidence={high_confidence_explicit}")
                             else:
                                 logger.error("Failed to recover NudeNet detector")
                                 avatar_unsafe = False
+                                avatar_suspicious = False
                         except Exception as retry_e:
                             logger.error(f"Detection retry failed: {retry_e}")
                             avatar_unsafe = False
+                            avatar_suspicious = False
                 
                 # Clean up the temporary file
                 try:
                     os.unlink(tmp.name)
+                    avatar_file_path = None
                 except:
                     pass
     except Exception as e:
         logger.warning(f"Avatar check failed: {e}")
 
-    # If not both features, skip LLM
-    if not (link_in_bio or avatar_unsafe):
+    # If no risk indicators are present, skip LLM
+    if not (link_in_bio or avatar_unsafe or avatar_suspicious):
         await app.state.db.execute(
             """
-            INSERT INTO logs(user_id, chat_id, msg_text, link_in_bio, avatar_unsafe, llm_result, latency_ms)
-            VALUES($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO logs(user_id, chat_id, msg_text, link_in_bio, avatar_unsafe, avatar_suspicious, llm_result, latency_ms)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8)
             """,
-            user.id, chat.id, msg_text, link_in_bio, avatar_unsafe, 0, 0,
+            user.id, chat.id, msg_text, link_in_bio, avatar_unsafe, avatar_suspicious, 0, 0,
         )
         return JSONResponse({"ok": True})
 
@@ -340,6 +390,14 @@ async def webhook(request: Request):
         f"Bio: {bio}\n"
         f"Message: {msg_text}"
     )
+    
+    # Add information about suspicious avatar to the prompt if detected
+    if avatar_suspicious:
+        # If the avatar is suspicious, include that information
+        prompt += f"\nAvatar: Suspicious avatar detected with potential NSFW content but low confidence score."
+    elif avatar_unsafe:
+        # If the avatar is unsafe, include that information
+        prompt += f"\nAvatar: Unsafe avatar detected with high confidence of NSFW content."
     start = time.time()
     try:
         response = await app.state.openai_client.chat.completions.create(
@@ -365,10 +423,10 @@ async def webhook(request: Request):
     # Log into DB
     await app.state.db.execute(
         """
-        INSERT INTO logs(user_id, chat_id, msg_text, link_in_bio, avatar_unsafe, llm_result, latency_ms)
-        VALUES($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO logs(user_id, chat_id, msg_text, link_in_bio, avatar_unsafe, avatar_suspicious, llm_result, latency_ms)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8)
         """,
-        user.id, chat.id, msg_text, link_in_bio, avatar_unsafe, llm_result, latency_ms,
+        user.id, chat.id, msg_text, link_in_bio, avatar_unsafe, avatar_suspicious, llm_result, latency_ms,
     )
 
     return JSONResponse({"ok": True})
@@ -376,12 +434,28 @@ async def webhook(request: Request):
 @app.get("/stats")
 async def stats(payload: dict = Depends(verify_jwt)):
     """
-    Return statistics about spam removed.
+    Return statistics about spam removed and suspicious avatars caught.
     """
-    row = await app.state.db.fetchrow(
-        "SELECT COUNT(*) AS spam_removed FROM logs WHERE llm_result = 1"
+    rows = await app.state.db.fetch(
+        """
+        SELECT 
+            COUNT(*) FILTER (WHERE llm_result = 1) AS spam_removed,
+            COUNT(*) FILTER (WHERE avatar_suspicious = true AND llm_result = 1) AS suspicious_avatars_caught,
+            COUNT(*) FILTER (WHERE avatar_unsafe = true AND llm_result = 1) AS unsafe_avatars_caught,
+            COUNT(*) FILTER (WHERE avatar_suspicious = true) AS total_suspicious_avatars
+        FROM logs
+        """
     )
-    return {"spam_removed": row["spam_removed"], "period": "all"}
+    if rows and len(rows) > 0:
+        stats_row = rows[0]
+        return {
+            "spam_removed": stats_row["spam_removed"],
+            "suspicious_avatars_caught": stats_row["suspicious_avatars_caught"], 
+            "unsafe_avatars_caught": stats_row["unsafe_avatars_caught"],
+            "total_suspicious_avatars": stats_row["total_suspicious_avatars"],
+            "period": "all"
+        }
+    return {"spam_removed": 0, "suspicious_avatars_caught": 0, "unsafe_avatars_caught": 0, "total_suspicious_avatars": 0, "period": "all"}
 
 @app.post("/toggle")
 async def toggle(request: Request, payload: dict = Depends(verify_jwt)):
