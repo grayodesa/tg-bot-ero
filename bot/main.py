@@ -252,13 +252,14 @@ async def webhook(request: Request):
                         high_confidence_explicit = False
                         has_low_confidence_explicit = False  # Track lower threshold detections
                         
-                        # Go through the detections and check for explicit content classes
-                        explicit_classes = ['EXPOSED_ANUS', 'EXPOSED_ARMPITS', 'COVERED_BELLY', 
-                                           'EXPOSED_BELLY', 'COVERED_BUTTOCKS', 'EXPOSED_BUTTOCKS', 
-                                           'EXPOSED_BREAST_F', 'COVERED_BREAST_F', 'EXPOSED_GENITALIA_F', 
-                                           'EXPOSED_GENITALIA_M', 'EXPOSED_BREAST_M', 'EXPOSED_FEET']
+                        # Go through the detections and check for explicit content classes - using actual NudeNet labels
+                        explicit_classes = [
+                            "FEMALE_GENITALIA_EXPOSED", "FEMALE_BREAST_EXPOSED",
+                            "MALE_GENITALIA_EXPOSED", "MALE_BREAST_EXPOSED",
+                            "BUTTOCKS_EXPOSED", "ANUS_EXPOSED", "ARMPITS_EXPOSED"
+                        ]
                         
-                        suspicious_classes = ['FEMALE_FACE', 'MALE_FACE', 'FACE_F', 'FACE_M']
+                        suspicious_classes = ['FACE_FEMALE', 'FACE_MALE']
                         has_face = False  # Track if the image has a face
                         
                         for detection in detections:
@@ -282,10 +283,10 @@ async def webhook(request: Request):
                                 elif detection['class'] in explicit_classes and detection['score'] > 0.3:
                                     has_low_confidence_explicit = True
                                     logger.info(f"Low confidence explicit content found: {detection}")
-                                # Also check for specific class names that might have different formats
-                                elif detection['class'] in ['FEMALE_BREAST_COVERED', 'ARMPITS_EXPOSED'] and detection['score'] > 0.3:
+                                # Check for classes that indicate potential concern but at lower confidence
+                                elif detection['class'] in ["FEMALE_BREAST_COVERED", "BUTTOCKS_COVERED"] and detection['score'] > 0.3:
                                     has_low_confidence_explicit = True
-                                    logger.info(f"Specific class low confidence explicit content found: {detection}")
+                                    logger.info(f"Covered but explicit low confidence content found: {detection}")
                             else:
                                 logger.warning(f"Unexpected detection format: {detection}")
                         
@@ -324,13 +325,14 @@ async def webhook(request: Request):
                                 has_low_confidence_explicit = False
                                 has_face = False
                                 
-                                # Same explicit classes as before
-                                explicit_classes = ['EXPOSED_ANUS', 'EXPOSED_ARMPITS', 'COVERED_BELLY', 
-                                                  'EXPOSED_BELLY', 'COVERED_BUTTOCKS', 'EXPOSED_BUTTOCKS', 
-                                                  'EXPOSED_BREAST_F', 'COVERED_BREAST_F', 'EXPOSED_GENITALIA_F', 
-                                                  'EXPOSED_GENITALIA_M', 'EXPOSED_BREAST_M', 'EXPOSED_FEET']
+                                # Same explicit classes as before - using actual NudeNet labels
+                                explicit_classes = [
+                                    "FEMALE_GENITALIA_EXPOSED", "FEMALE_BREAST_EXPOSED",
+                                    "MALE_GENITALIA_EXPOSED", "MALE_BREAST_EXPOSED",
+                                    "BUTTOCKS_EXPOSED", "ANUS_EXPOSED", "ARMPITS_EXPOSED"
+                                ]
                                 
-                                suspicious_classes = ['FEMALE_FACE', 'MALE_FACE', 'FACE_F', 'FACE_M']
+                                suspicious_classes = ['FACE_FEMALE', 'FACE_MALE']
                                 
                                 for detection in detections:
                                     logger.info(f"Retry detection: {detection}")
@@ -351,10 +353,10 @@ async def webhook(request: Request):
                                         elif detection['class'] in explicit_classes and detection['score'] > 0.3:
                                             has_low_confidence_explicit = True
                                             logger.info(f"Retry: Low confidence explicit content found: {detection}")
-                                        # Also check for specific class names that might have different formats
-                                        elif detection['class'] in ['FEMALE_BREAST_COVERED', 'ARMPITS_EXPOSED'] and detection['score'] > 0.3:
+                                        # Check for classes that indicate potential concern but at lower confidence
+                                        elif detection['class'] in ["FEMALE_BREAST_COVERED", "BUTTOCKS_COVERED"] and detection['score'] > 0.3:
                                             has_low_confidence_explicit = True
-                                            logger.info(f"Retry: Specific class low confidence explicit content found: {detection}")
+                                            logger.info(f"Retry: Covered but explicit low confidence content found: {detection}")
                                     else:
                                         logger.warning(f"Retry: Unexpected detection format: {detection}")
                                 
