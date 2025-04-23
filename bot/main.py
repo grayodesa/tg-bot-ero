@@ -413,7 +413,8 @@ async def webhook(request: Request):
         prompt += f"\nAvatar: Unsafe avatar detected with high confidence of NSFW content."
     start = time.time()
     try:
-        response = await app.state.openai_client.chat.completions.create(
+        # The OpenAI client methods are not async, don't use await
+        response = app.state.openai_client.chat.completions.create(
             model=config.OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
