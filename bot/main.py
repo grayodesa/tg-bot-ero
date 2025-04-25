@@ -293,9 +293,8 @@ async def webhook(request: Request):
                         # If we have high confidence detection or multiple lower confidence detections
                         avatar_unsafe = high_confidence_explicit or has_explicit_content
                         
-                        # Consider an avatar suspicious if it has a face + low confidence detection
-                        # This is the new condition that will trigger LLM verification
-                        avatar_suspicious = has_face and has_low_confidence_explicit and not avatar_unsafe
+                        # Consider avatar suspicious if it has any low confidence explicit content detection
+                        avatar_suspicious = has_low_confidence_explicit and not avatar_unsafe
                         
                         logger.info(f"Avatar analysis: unsafe={avatar_unsafe}, suspicious={avatar_suspicious}, high_confidence={high_confidence_explicit}")
                         
@@ -364,7 +363,7 @@ async def webhook(request: Request):
                                 avatar_unsafe = high_confidence_explicit or has_explicit_content
                                 
                                 # Set avatar_suspicious based on detections
-                                avatar_suspicious = has_face and has_low_confidence_explicit and not avatar_unsafe
+                                avatar_suspicious = has_low_confidence_explicit and not avatar_unsafe
                                 
                                 logger.info(f"Avatar analysis after retry: unsafe={avatar_unsafe}, suspicious={avatar_suspicious}, high_confidence={high_confidence_explicit}")
                             else:
@@ -385,8 +384,26 @@ async def webhook(request: Request):
     except Exception as e:
         logger.warning(f"Avatar check failed: {e}")
 
-    # If no risk indicators are present, skip LLM
-    if not (link_in_bio or avatar_unsafe or avatar_suspicious):
+    # If avatar is unsafe, delete message and ban user immediately
+    if avatar_unsafe:
+        try:
+            await bot.delete_message(chat.id, message.message_id)
+            await bot.ban_chat_member(chat.id, user.id)
+            
+            # Log the action
+            await app.state.db.execute(
+                """
+                INSERT INTO logs(user_id, chat_id, msg_text, link_in_bio, avatar_unsafe, avatar_suspicious, llm_result, latency_ms)
+                VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                user.id, chat.id, msg_text, link_in_bio, avatar_unsafe, avatar_suspicious, 1, 0,
+            )
+            return JSONResponse({"ok": True})
+        except TelegramError as e:
+            logger.error("Failed to take action on unsafe avatar: %s", e)
+    
+    # If no suspicious indicators or link in bio, skip LLM
+    if not (link_in_bio or avatar_suspicious):
         await app.state.db.execute(
             """
             INSERT INTO logs(user_id, chat_id, msg_text, link_in_bio, avatar_unsafe, avatar_suspicious, llm_result, latency_ms)
@@ -419,7 +436,9 @@ async def webhook(request: Request):
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
         )
-        answer = response.choices[0].message.content.strip().split()[0]
+        content = response.choices[0].message.content.strip()
+        # Extract first digit (0 or 1) from response, or default to 0
+        answer = next((char for char in content if char in '01'), '0')
         llm_result = int(answer)
     except Exception as e:
         logger.error("LLM call failed: %s", e)
