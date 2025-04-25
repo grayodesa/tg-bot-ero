@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Update lockfile: `poetry lock`
 - Build and run with Docker: `docker-compose up --build`
 - Generate admin token: `python scripts/gen_token.py <ADMIN_ID>`
+- Run tests: `poetry run test` or `python -m pytest tests/`
 
 ## Code Guidelines
 
