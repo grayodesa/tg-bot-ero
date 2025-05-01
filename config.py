@@ -18,6 +18,8 @@ class Config:
     ADMIN_IDS: List[int] = [int(i) for i in os.getenv("ADMIN_IDS", "").split(",") if i]
     # Public URL for Telegram webhook
     WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
+    # Secret token for Telegram webhook validation
+    WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "")
     # DSN for PostgreSQL via asyncpg (expects postgresql:// scheme)
     _raw_dsn: str = os.getenv("POSTGRES_DSN", "")
     # Allow user to provide SQLAlchemy-style DSN and normalize it
@@ -31,5 +33,9 @@ class Config:
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     # Log level for application
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "info")
+    # Avatar cache TTL in seconds (default: 1 hour)
+    AVATAR_CACHE_TTL: int = int(os.getenv("AVATAR_CACHE_TTL", "3600"))
+    # JWT token expiration in seconds (default: 24 hours)
+    JWT_EXPIRATION: int = int(os.getenv("JWT_EXPIRATION", "86400"))
 
 config = Config()

@@ -1,44 +1,56 @@
 """
 Utility script to generate JWT tokens for admin users.
 Usage:
-  python gen_token.py <ADMIN_ID>
+  python gen_token.py <ADMIN_ID> [EXPIRATION_SECONDS]
 Set environment variable JWT_SECRET to the secret used by the app.
 """
 import os
 import sys
-import json
-import base64
-import hmac
-import hashlib
+import time
 
-def base64url_encode(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode('utf-8')
+# Add parent directory to path to import from bot package
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-def generate_token(admin_id: int, secret: str) -> str:
-    header = {"alg": "HS256", "typ": "JWT"}
-    payload = {"admin_id": admin_id}
-    header_b64 = base64url_encode(json.dumps(header).encode())
-    payload_b64 = base64url_encode(json.dumps(payload).encode())
-    signing_input = f"{header_b64}.{payload_b64}".encode()
-    signature = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
-    signature_b64 = base64url_encode(signature)
-    return f"{header_b64}.{payload_b64}.{signature_b64}"
+from bot.auth import create_jwt
+from config import config
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python gen_token.py <ADMIN_ID>")
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print("Usage: python gen_token.py <ADMIN_ID> [EXPIRATION_SECONDS]")
         sys.exit(1)
+    
     try:
         admin_id = int(sys.argv[1])
     except ValueError:
         print("ADMIN_ID must be an integer.")
         sys.exit(1)
-    secret = os.getenv('JWT_SECRET')
+    
+    # Use custom expiration if provided
+    expiration_seconds = None
+    if len(sys.argv) == 3:
+        try:
+            expiration_seconds = int(sys.argv[2])
+        except ValueError:
+            print("EXPIRATION_SECONDS must be an integer.")
+            sys.exit(1)
+    
+    # Use config.JWT_SECRET or environment variable
+    secret = config.JWT_SECRET or os.getenv('JWT_SECRET')
     if not secret:
-        print("Error: JWT_SECRET environment variable not set.")
+        print("Error: JWT_SECRET not set in config or environment variable.")
         sys.exit(1)
-    token = generate_token(admin_id, secret)
+    
+    # Create token with expiration
+    token = create_jwt(admin_id, secret, expiration_seconds)
+    
+    print(f"Token for admin_id {admin_id}:")
     print(token)
+    
+    # Show expiration info
+    if expiration_seconds:
+        print(f"Token will expire in {expiration_seconds} seconds")
+    else:
+        print(f"Token will expire in {config.JWT_EXPIRATION} seconds (default)")
 
 if __name__ == "__main__":
     main()

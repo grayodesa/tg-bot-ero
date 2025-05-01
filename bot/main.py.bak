@@ -1,6 +1,7 @@
 """
 Main application for the anti-erotic-spam Telegram bot.
 """
+import os
 import time
 import logging
 from typing import Dict, Any
@@ -230,8 +231,7 @@ def main():
     Run the application with uvicorn.
     """
     import uvicorn
-    import os
-    
+
     uvicorn.run(
         "bot.main:app",
         host=os.getenv("UVICORN_HOST", "0.0.0.0"),
