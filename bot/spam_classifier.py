@@ -45,7 +45,7 @@ async def classify_message(
     prompt = (
         f"Determine if this message is low-quality spam (0-not spam, 1-spam).\n"
         f"Classify as spam (1) if the message is senseless, very short, or doesn't add any meaningful information to the chat, "
-        f"especially when combined with an erotic/NSFW avatar or links in the bio.\n\n"
+        f"especially when combined with an erotic/NSFW/suspicious avatar and/or there is a link in the bio.\n\n"
         f"Name: {user_name}\n"
         f"Bio: {bio}\n"
         f"Message: {message}"
