@@ -209,13 +209,54 @@ Or with pytest directly:
 python -m pytest tests/
 ```
 
-## Admin Dashboard
+## Admin Dashboard and Monitoring
+
+### Admin Dashboard
 
 Access the admin dashboard at `/admin/dashboard` using a valid JWT token. The dashboard provides:
 
 - Real-time statistics on spam detection
 - Bot control panel (enable/disable)
 - Performance metrics
+
+To access the dashboard:
+1. Generate an access token using the `gen_token.py` script:
+   ```
+   python scripts/gen_token.py <YOUR_ADMIN_ID>
+   ```
+2. Use the token with an HTTP client (like curl) by setting the Authorization header:
+   ```
+   curl -H "Authorization: Bearer <YOUR_TOKEN>" http://your-bot-domain.com/admin/dashboard
+   ```
+   Or simply visit `/admin/dashboard` in your browser and provide the token when prompted.
+
+### Prometheus and Grafana Monitoring
+
+The project includes a complete monitoring stack with Prometheus and Grafana:
+
+1. Start the monitoring stack:
+   ```
+   docker-compose -f docker-compose.monitoring.yml up -d
+   ```
+
+2. Access Grafana dashboards:
+   - URL: http://localhost:3000
+   - Default login: admin/admin
+   - A pre-configured dashboard for the bot is available under "Dashboards"
+
+3. Access Prometheus directly:
+   - URL: http://localhost:9090
+   - Use the Prometheus UI to query metrics and check alert status
+
+4. AlertManager for alert management:
+   - URL: http://localhost:9093
+   - Configure notifications by editing `monitoring/alertmanager.yml`
+
+The monitoring stack provides:
+- Real-time metrics visualization
+- Performance tracking
+- Alerts for critical conditions
+- Historical data analysis
 
 ## License
 
