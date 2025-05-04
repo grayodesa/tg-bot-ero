@@ -1,0 +1,27 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'job']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: 'web-hook'
+  routes:
+    - match:
+        severity: critical
+      receiver: 'web-hook'
+      continue: true
+
+receivers:
+  - name: 'web-hook'
+    webhook_configs:
+      - url: 'http://bot:8000/alerts'
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'job']

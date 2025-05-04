@@ -46,7 +46,7 @@ async def create_db_pool(dsn: str, max_retries: int = 10, retry_delay: int = 2) 
 
 async def initialize_tables(pool: asyncpg.Pool) -> None:
     """
-    Initialize database tables.
+    Initialize database tables and indexes.
     
     Args:
         pool: asyncpg connection pool
@@ -78,14 +78,55 @@ async def initialize_tables(pool: asyncpg.Pool) -> None:
         )
         logger.info("Ensured avatar_suspicious column exists in logs table")
         
+        # Create indexes for better query performance
+        await pool.execute(
+            """
+            -- Index for user_id queries (for looking up user history)
+            CREATE INDEX IF NOT EXISTS logs_user_id_idx ON logs(user_id);
+            
+            -- Index for chat_id queries (for looking up chat history)
+            CREATE INDEX IF NOT EXISTS logs_chat_id_idx ON logs(chat_id);
+            
+            -- Composite index for user_id and chat_id (for looking up user messages in a specific chat)
+            CREATE INDEX IF NOT EXISTS logs_user_chat_idx ON logs(user_id, chat_id);
+            
+            -- Index on timestamp for date range queries
+            CREATE INDEX IF NOT EXISTS logs_timestamp_idx ON logs(timestamp);
+            
+            -- Index on llm_result for filtering spam messages
+            CREATE INDEX IF NOT EXISTS logs_llm_result_idx ON logs(llm_result);
+            
+            -- Index on avatar_unsafe and avatar_suspicious for filtering messages with unsafe/suspicious avatars
+            CREATE INDEX IF NOT EXISTS logs_avatar_unsafe_idx ON logs(avatar_unsafe);
+            CREATE INDEX IF NOT EXISTS logs_avatar_suspicious_idx ON logs(avatar_suspicious);
+            """
+        )
+        logger.info("Created or ensured indexes on logs table")
+        
         # Ensure pending-first-message table exists
         await pool.execute(
             """
             CREATE TABLE IF NOT EXISTS pending_first (
                 chat_id BIGINT,
                 user_id BIGINT,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
                 PRIMARY KEY (chat_id, user_id)
             );
+            """
+        )
+        
+        # Add created_at column if it doesn't exist
+        await pool.execute(
+            """
+            ALTER TABLE pending_first
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+            """
+        )
+        
+        # Create index for cleanup of old pending entries
+        await pool.execute(
+            """
+            CREATE INDEX IF NOT EXISTS pending_first_created_at_idx ON pending_first(created_at);
             """
         )
         
@@ -94,8 +135,17 @@ async def initialize_tables(pool: asyncpg.Pool) -> None:
             """
             CREATE TABLE IF NOT EXISTS bot_config (
                 key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
+                value TEXT NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
             );
+            """
+        )
+        
+        # Add updated_at column if it doesn't exist
+        await pool.execute(
+            """
+            ALTER TABLE bot_config
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
             """
         )
         
@@ -108,7 +158,7 @@ async def initialize_tables(pool: asyncpg.Pool) -> None:
             """
         )
         
-        logger.info("Database tables initialized successfully")
+        logger.info("Database tables and indexes initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database tables: {e}")
         raise
@@ -240,9 +290,9 @@ async def set_bot_enabled_state(pool: asyncpg.Pool, enabled: bool) -> None:
     try:
         await pool.execute(
             """
-            INSERT INTO bot_config(key, value) 
-            VALUES('enabled', $1) 
-            ON CONFLICT(key) DO UPDATE SET value = $1
+            INSERT INTO bot_config(key, value, updated_at) 
+            VALUES('enabled', $1, NOW()) 
+            ON CONFLICT(key) DO UPDATE SET value = $1, updated_at = NOW()
             """,
             json.dumps(enabled)
         )

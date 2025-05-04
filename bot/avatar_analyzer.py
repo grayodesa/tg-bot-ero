@@ -1,47 +1,75 @@
 """
 Avatar analysis module for detecting NSFW content in user profile pictures.
 """
-import os
-import time
-import tempfile
+import threading
 import logging
-from typing import Dict, Tuple, Optional, Any
+from typing import Dict, Tuple, Optional, Any, ClassVar
 
 from telegram import Bot
 from telegram.error import TelegramError
 from nudenet import NudeDetector
 
 from config import config
+from bot.utils.file_utils import secure_tempfile
+from bot.cache import async_cached
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# In-memory cache for avatar analysis results
-AVATAR_CACHE: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL = config.AVATAR_CACHE_TTL  # From config
 
-# NudeNet detector instance (lazy-loaded)
-detector = None
-
-
-def initialize_detector() -> Optional[NudeDetector]:
+class NudeNetSingleton:
     """
-    Initialize the NudeDetector.
-    According to GitHub README.md, this will use the 320n model included with the package.
+    Singleton pattern for NudeNet detector to ensure it's initialized only once.
     """
-    try:
-        logger.info("Initializing NudeDetector")
-        
-        # Simple initialization - the 320n model is included in the package
-        detector = NudeDetector()
-        logger.info("NudeDetector initialized successfully")
-        
-        return detector
-    except Exception as e:
-        logger.error(f"Failed to initialize NudeDetector: {e}")
-        return None
+    _instance: ClassVar[Optional['NudeNetSingleton']] = None
+    _lock: ClassVar[threading.Lock] = threading.Lock()
+    
+    detector: Optional[NudeDetector] = None
+    
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                logger.info("Creating NudeNetSingleton instance")
+                cls._instance = super(NudeNetSingleton, cls).__new__(cls)
+                cls._instance.detector = None
+            return cls._instance
+    
+    def get_detector(self) -> Optional[NudeDetector]:
+        """
+        Get or initialize the NudeDetector instance.
+        """
+        if self.detector is None:
+            self.initialize_detector()
+        return self.detector
+    
+    def initialize_detector(self) -> Optional[NudeDetector]:
+        """
+        Initialize the NudeDetector.
+        """
+        try:
+            logger.info("Initializing NudeDetector")
+            # Simple initialization - the 320n model is included in the package
+            self.detector = NudeDetector()
+            logger.info("NudeDetector initialized successfully")
+            return self.detector
+        except Exception as e:
+            logger.error(f"Failed to initialize NudeDetector: {e}")
+            self.detector = None
+            return None
+    
+    def reset_detector(self) -> Optional[NudeDetector]:
+        """
+        Reset the detector instance and reinitialize it.
+        """
+        self.detector = None
+        return self.get_detector()
 
 
+# Create the singleton instance
+nude_net = NudeNetSingleton()
+
+
+@async_cached("avatar", config.AVATAR_CACHE_TTL)
 async def check_avatar(bot: Bot, user_id: int, force_refresh: bool = False) -> Tuple[bool, bool]:
     """
     Check if a user's avatar contains NSFW content.
@@ -54,16 +82,9 @@ async def check_avatar(bot: Bot, user_id: int, force_refresh: bool = False) -> T
     Returns:
         Tuple of (avatar_unsafe, avatar_suspicious)
     """
-    # Check cache first if not forcing refresh
-    cache_key = f"avatar:{user_id}"
-    if not force_refresh and cache_key in AVATAR_CACHE:
-        if time.time() - AVATAR_CACHE[cache_key]['timestamp'] < CACHE_TTL:
-            logger.info(f"Using cached avatar analysis for user {user_id}")
-            return AVATAR_CACHE[cache_key]['result']
-    
+    logger.info(f"Analyzing avatar for user {user_id}")
     avatar_unsafe = False
     avatar_suspicious = False
-    avatar_file_path = None
     
     try:
         photos = await bot.get_user_profile_photos(user_id, limit=1)
@@ -71,73 +92,49 @@ async def check_avatar(bot: Bot, user_id: int, force_refresh: bool = False) -> T
             file_id = photos.photos[0][-1].file_id
             tg_file = await bot.get_file(file_id)
             
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                await tg_file.download_to_drive(tmp.name)
-                avatar_file_path = tmp.name
+            # Use secure_tempfile context manager to ensure cleanup
+            with secure_tempfile(suffix=".jpg", prefix=f"avatar_{user_id}_") as temp_path:
+                await tg_file.download_to_drive(temp_path)
                 
-                # Lazy-load NudeDetector
-                global detector
-                
-                # Initialize if not already done
-                if detector is None:
-                    detector = initialize_detector()
+                # Get NudeDetector instance
+                detector = nude_net.get_detector()
                 
                 # Only attempt detection if detector was initialized successfully
                 if detector is not None:
                     try:
                         # Run detection
-                        avatar_unsafe, avatar_suspicious = _run_detection(tmp.name)
+                        avatar_unsafe, avatar_suspicious = _run_detection(temp_path, detector)
                     except Exception as e:
                         logger.warning(f"Detection failed: {e}")
                         # Reset detector and try again with fresh instance
-                        detector = None
-                        try:
-                            # Initialize with new instance
-                            detector = initialize_detector()
-                            
-                            if detector:
-                                # Retry detection
-                                avatar_unsafe, avatar_suspicious = _run_detection(tmp.name)
-                            else:
-                                logger.error("Failed to recover NudeNet detector")
-                                avatar_unsafe = False
-                                avatar_suspicious = False
-                        except Exception as retry_e:
-                            logger.error(f"Detection retry failed: {retry_e}")
+                        detector = nude_net.reset_detector()
+                        
+                        if detector:
+                            # Retry detection
+                            avatar_unsafe, avatar_suspicious = _run_detection(temp_path, detector)
+                        else:
+                            logger.error("Failed to recover NudeNet detector")
                             avatar_unsafe = False
                             avatar_suspicious = False
-                
-                # Clean up the temporary file
-                try:
-                    os.unlink(tmp.name)
-                    avatar_file_path = None
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temporary file: {e}")
+                else:
+                    logger.error("NudeDetector not available")
     except Exception as e:
         logger.warning(f"Avatar check failed: {e}")
     
-    # Cache the results
-    result = (avatar_unsafe, avatar_suspicious)
-    AVATAR_CACHE[cache_key] = {
-        'timestamp': time.time(),
-        'result': result
-    }
-    
-    return result
+    return avatar_unsafe, avatar_suspicious
 
 
-def _run_detection(image_path: str) -> Tuple[bool, bool]:
+def _run_detection(image_path: str, detector: NudeDetector) -> Tuple[bool, bool]:
     """
     Run NudeNet detection on an image.
     
     Args:
         image_path: Path to the image file
+        detector: NudeDetector instance
         
     Returns:
         Tuple of (avatar_unsafe, avatar_suspicious)
     """
-    global detector
-    
     logger.info(f"Running NudeDetector on {image_path}")
     
     detections = detector.detect(image_path)

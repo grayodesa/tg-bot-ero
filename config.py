@@ -37,5 +37,13 @@ class Config:
     AVATAR_CACHE_TTL: int = int(os.getenv("AVATAR_CACHE_TTL", "3600"))
     # JWT token expiration in seconds (default: 24 hours)
     JWT_EXPIRATION: int = int(os.getenv("JWT_EXPIRATION", "86400"))
+    # Redis URL for caching (optional)
+    REDIS_URL: str = os.getenv("REDIS_URL", "")
+    # JWT refresh token expiration (default: 7 days)
+    JWT_REFRESH_EXPIRATION: int = int(os.getenv("JWT_REFRESH_EXPIRATION", "604800"))
+    # Rate limit for webhook (requests per minute)
+    WEBHOOK_RATE_LIMIT: int = int(os.getenv("WEBHOOK_RATE_LIMIT", "60"))
+    # Temporary files directory
+    TEMP_DIR: str = os.getenv("TEMP_DIR", "/tmp")
 
 config = Config()

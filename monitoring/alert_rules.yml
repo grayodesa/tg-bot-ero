@@ -1,0 +1,38 @@
+groups:
+  - name: bot_alerts
+    rules:
+      - alert: HighErrorRate
+        expr: rate(webhook_errors_total[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High webhook error rate"
+          description: "Webhook error rate is {{ $value }} per second for the last 5 minutes."
+
+      - alert: SlowResponseTime
+        expr: avg_over_time(webhook_latency_seconds[5m]) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow webhook response time"
+          description: "Average webhook response time is {{ $value }}s for the last 5 minutes."
+
+      - alert: HighSpamRate
+        expr: rate(spam_detected_total[10m]) > 1
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "High spam detection rate"
+          description: "Spam is being detected at a rate of {{ $value }} per second for the last 10 minutes."
+
+      - alert: BotDisabled
+        expr: bot_enabled == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bot is disabled"
+          description: "The bot has been disabled for more than 5 minutes."

@@ -7,6 +7,9 @@ from typing import Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 import telegram
 from telegram import Update, Bot
@@ -15,21 +18,21 @@ from telegram.error import TelegramError
 from openai import OpenAI
 
 from config import config
-from bot.auth import verify_jwt, validate_telegram_request
-from bot.avatar_analyzer import check_avatar
-from bot.spam_classifier import classify_message, needs_classification
+from bot.security import (
+    JWTHandler, WebhookValidator, RateLimitMiddleware,
+    verify_jwt_dependency, rate_limit_dependency
+)
 from bot.database import (
     create_db_pool, initialize_tables, log_message, mark_new_member,
     check_pending, clear_pending, get_bot_enabled_state, set_bot_enabled_state,
     get_stats
 )
-from bot.telegram_utils import check_bio_for_links, take_action, extract_user_and_chat
+from bot.telegram_utils import take_action
+from bot.cache import cache_manager
+from bot.services.spam_detector import SpamDetector
 from bot.metrics import (
     timed_execution, increment_counter, set_gauge,
-    spam_detected, avatar_unsafe, avatar_suspicious,
-    webhook_requests, webhook_errors, llm_latency,
-    avatar_check_latency, webhook_latency,
-    detector_initialized, bot_enabled
+    webhook_requests, webhook_errors, webhook_latency, bot_enabled
 )
 
 
@@ -38,10 +41,37 @@ logging.basicConfig(level=getattr(logging, config.LOG_LEVEL.upper(), logging.INF
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI
-app = FastAPI()
+app = FastAPI(
+    title="Anti-Erotic Spam Bot",
+    description="Telegram bot for detecting and removing erotic spam messages",
+    version="1.0.0"
+)
+
+# Initialize security components
+jwt_handler = JWTHandler(config.JWT_SECRET)
+webhook_validator = WebhookValidator()
 
 # Initialize Telegram Bot
 bot = Bot(token=config.TG_TOKEN)
+
+# Add middlewares
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For dev only, restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(
+    RateLimitMiddleware,
+    rate_limit_per_minute=config.WEBHOOK_RATE_LIMIT,
+    endpoint_filter=lambda path: path == "/webhook"
+)
+
+# Import and include the admin router
+from bot.admin.router import router as admin_router
+app.include_router(admin_router)
 
 
 @app.on_event("startup")
@@ -58,6 +88,14 @@ async def on_startup():
     # Initialize database tables
     await initialize_tables(app.state.db)
     
+    # Initialize spam detector service
+    app.state.spam_detector = SpamDetector(
+        bot=bot,
+        openai_client=app.state.openai_client,
+        model_name=config.OPENAI_MODEL,
+        cache_manager=cache_manager
+    )
+    
     # Set bot enabled gauge
     enabled = await get_bot_enabled_state(app.state.db)
     set_gauge(bot_enabled, 1 if enabled else 0)
@@ -73,7 +111,7 @@ async def on_shutdown():
         logger.info("Database connection pool closed")
 
 
-@app.post("/webhook")
+@app.post("/webhook", dependencies=[Depends(rate_limit_dependency)])
 async def webhook(request: Request):
     """
     Telegram webhook endpoint to receive updates.
@@ -84,7 +122,7 @@ async def webhook(request: Request):
     # Start timing webhook request
     with timed_execution(webhook_latency):
         # Validate webhook request
-        if config.WEBHOOK_SECRET and not validate_telegram_request(config.WEBHOOK_SECRET, request.headers):
+        if not webhook_validator.validate_telegram_webhook(request, config.WEBHOOK_SECRET):
             increment_counter(webhook_errors)
             raise HTTPException(status_code=403, detail="Unauthorized")
         
@@ -95,110 +133,72 @@ async def webhook(request: Request):
         
         # Parse update
         try:
-            data = await request.json()
+            data = await webhook_validator.validate_webhook_data(request)
             update = Update.de_json(data, bot)
         except Exception as e:
             logger.error("Failed to parse update: %s", e)
             increment_counter(webhook_errors)
             raise HTTPException(status_code=400, detail="Invalid update payload")
         
-        message = update.message
-        
-        # Handle new chat members: mark for first-message check
-        if message and message.new_chat_members:
-            for new_member in message.new_chat_members:
-                await mark_new_member(app.state.db, message.chat.id, new_member.id)
-            return JSONResponse({"ok": True})
-        
-        # Only process the first message per user after joining
-        if not message or not message.text:
-            return JSONResponse({"ok": True})
-        
-        user = message.from_user
-        chat = message.chat
-        
-        # Check pending-first flag
-        pending = await check_pending(app.state.db, chat.id, user.id)
-        if not pending:
-            # Not a first message after join: skip
-            return JSONResponse({"ok": True})
-        
-        # Clear pending flag so we only check once
-        await clear_pending(app.state.db, chat.id, user.id)
-        
-        msg_text = message.text
-        
-        # Check for links in bio
-        bio, link_in_bio = await check_bio_for_links(bot, user.id)
-        
-        # Check avatar for NSFW content
-        with timed_execution(avatar_check_latency):
-            avatar_unsafe_result, avatar_suspicious_result = await check_avatar(bot, user.id)
-        
-        # Update metrics
-        if avatar_unsafe_result:
-            increment_counter(avatar_unsafe)
-        if avatar_suspicious_result:
-            increment_counter(avatar_suspicious)
-        
-        # If avatar is unsafe, delete message and ban user immediately
-        if avatar_unsafe_result:
-            success = await take_action(bot, chat.id, message.message_id, user.id)
-            
-            # Log the action
-            await log_message(
-                app.state.db,
-                user.id, chat.id, msg_text, link_in_bio, 
-                avatar_unsafe_result, avatar_suspicious_result, 
-                1, 0
-            )
-            
-            return JSONResponse({"ok": True})
-        
-        # If no suspicious indicators or link in bio, skip LLM
-        if not needs_classification(link_in_bio, avatar_suspicious_result):
-            await log_message(
-                app.state.db,
-                user.id, chat.id, msg_text, link_in_bio, 
-                avatar_unsafe_result, avatar_suspicious_result, 
-                0, 0
-            )
-            return JSONResponse({"ok": True})
-        
-        # LLM evaluation
-        with timed_execution(llm_latency):
-            llm_result, latency_ms = await classify_message(
-                app.state.openai_client,
-                config.OPENAI_MODEL,
-                user.first_name,
-                bio,
-                msg_text,
-                avatar_suspicious_result,
-                avatar_unsafe_result
-            )
-        
-        # Update metrics if spam detected
-        if llm_result == 1:
-            increment_counter(spam_detected)
-            # Take action
-            await take_action(bot, chat.id, message.message_id, user.id)
-        
-        # Log into DB
-        await log_message(
-            app.state.db,
-            user.id, chat.id, msg_text, link_in_bio, 
-            avatar_unsafe_result, avatar_suspicious_result, 
-            llm_result, latency_ms
-        )
-        
+        # Process the update
+        return await process_update(update)
+
+
+async def process_update(update: Update):
+    """
+    Process a Telegram update, separated from webhook for better testing.
+    """
+    message = update.message
+    
+    # Handle new chat members: mark for first-message check
+    if message and message.new_chat_members:
+        for new_member in message.new_chat_members:
+            await mark_new_member(app.state.db, message.chat.id, new_member.id)
         return JSONResponse({"ok": True})
+    
+    # Only process the first message per user after joining
+    if not message or not message.text:
+        return JSONResponse({"ok": True})
+    
+    user = message.from_user
+    chat = message.chat
+    
+    # Check pending-first flag
+    pending = await check_pending(app.state.db, chat.id, user.id)
+    if not pending:
+        # Not a first message after join: skip
+        return JSONResponse({"ok": True})
+    
+    # Clear pending flag so we only check once
+    await clear_pending(app.state.db, chat.id, user.id)
+    
+    # Run spam analysis using the service
+    result = await app.state.spam_detector.analyze_user(
+        user_id=user.id,
+        first_name=user.first_name,
+        message=message.text
+    )
+    
+    # Take action if spam is detected
+    if result['is_spam']:
+        await take_action(bot, chat.id, message.message_id, user.id)
+    
+    # Log message to database
+    await log_message(
+        app.state.db,
+        user.id, chat.id, message.text,
+        result['link_in_bio'],
+        result['avatar_unsafe'],
+        result['avatar_suspicious'], 
+        result['llm_result'],
+        result['latency_ms']
+    )
+    
+    return JSONResponse({"ok": True})
 
 
 @app.get("/stats")
-async def stats(payload: Dict = Depends(lambda: verify_jwt(
-    jwt_secret=config.JWT_SECRET, 
-    admin_ids=config.ADMIN_IDS
-))):
+async def stats(admin_data: Dict = Depends(verify_jwt_dependency)):
     """
     Return statistics about spam removed and suspicious avatars caught.
     """
@@ -206,10 +206,7 @@ async def stats(payload: Dict = Depends(lambda: verify_jwt(
 
 
 @app.post("/toggle")
-async def toggle(request: Request, payload: Dict = Depends(lambda: verify_jwt(
-    jwt_secret=config.JWT_SECRET, 
-    admin_ids=config.ADMIN_IDS
-))):
+async def toggle(request: Request, admin_data: Dict = Depends(verify_jwt_dependency)):
     """
     Toggle the bot on or off.
     """
@@ -223,6 +220,79 @@ async def toggle(request: Request, payload: Dict = Depends(lambda: verify_jwt(
     set_gauge(bot_enabled, 1 if enabled else 0)
     
     return {"enabled": enabled}
+
+
+@app.post("/refresh-token")
+async def refresh_token(request: Request):
+    """
+    Generate a new access token using a refresh token.
+    """
+    try:
+        data = await request.json()
+        refresh_token = data.get("refresh_token")
+        
+        if not refresh_token:
+            raise HTTPException(status_code=400, detail="Refresh token is required")
+        
+        # Generate new access token
+        new_token = jwt_handler.refresh_access_token(
+            refresh_token, 
+            config.ADMIN_IDS,
+            config.JWT_EXPIRATION
+        )
+        
+        return {
+            "access_token": new_token,
+            "token_type": "bearer",
+            "expires_in": config.JWT_EXPIRATION
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error refreshing token: {e}")
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for Docker healthcheck.
+    Checks database and Redis connections.
+    """
+    health_status = {
+        "status": "ok",
+        "services": {
+            "database": "ok",
+            "redis": "ok" if config.REDIS_URL else "not_configured"
+        },
+        "timestamp": int(time.time())
+    }
+    
+    # Check database connection
+    try:
+        if hasattr(app.state, "db"):
+            async with app.state.db.acquire() as conn:
+                await conn.execute("SELECT 1")
+        else:
+            health_status["services"]["database"] = "not_connected"
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        health_status["services"]["database"] = "error"
+        health_status["status"] = "degraded"
+    
+    # Check Redis connection if configured
+    if config.REDIS_URL:
+        try:
+            import redis
+            r = redis.from_url(config.REDIS_URL)
+            r.ping()
+        except Exception as e:
+            logger.error(f"Redis health check failed: {e}")
+            health_status["services"]["redis"] = "error"
+            health_status["status"] = "degraded"
+    
+    status_code = 200 if health_status["status"] == "ok" else 500
+    return JSONResponse(content=health_status, status_code=status_code)
 
 
 def main():
