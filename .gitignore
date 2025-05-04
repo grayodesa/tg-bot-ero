@@ -9,3 +9,11 @@ __pypackages__/
 venv/
 simple_fix.py
 /tests/
+review.md
+text-prompting.md
+release-plan.md
+prd.md
+CLAUDE.md
+.vscode/
+.pytest_cache/
+.ropeproject/
