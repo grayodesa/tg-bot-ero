@@ -17,3 +17,4 @@ CLAUDE.md
 .vscode/
 .pytest_cache/
 .ropeproject/
+git-cleanup.py
