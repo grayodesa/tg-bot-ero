@@ -53,7 +53,8 @@ async def classify_message(
         f"Remember: A suspicious avatar alone makes spam very likely. When in doubt with suspicious avatar, classify as spam.\n\n"
         f"Name: {user_name}\n"
         f"Bio: {bio}\n"
-        f"Message: {message}"
+        f"Message: {message}\n\n"
+        f"Reply only with a number (0 or 1)"
     )
     
     # Add information about suspicious avatar to the prompt if detected
