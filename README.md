@@ -195,20 +195,6 @@ The project includes a multi-stage Docker build for efficient container images a
 - **Volume Persistence**: Data persistence for database and Redis
 - **Resource Management**: Configurable resource limits
 
-## Automated Tests
-
-Run the test suite with:
-
-```bash
-poetry run test
-```
-
-Or with pytest directly:
-
-```bash
-python -m pytest tests/
-```
-
 ## Admin Dashboard and Monitoring
 
 ### Admin Dashboard
