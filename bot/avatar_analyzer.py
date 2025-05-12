@@ -182,7 +182,7 @@ def _run_detection(image_path: str, detector: NudeDetector) -> Tuple[bool, bool]
                 has_low_confidence_explicit = True
                 logger.info(f"Low confidence explicit content found: {detection}")
             # Check for classes that indicate potential concern but at lower confidence
-            elif detection['class'] in ["FEMALE_BREAST_COVERED", "BUTTOCKS_COVERED"] and detection['score'] > 0.3:
+            elif detection['class'] in ["FEMALE_BREAST_COVERED", "BUTTOCKS_COVERED"] and detection['score'] > 0.2:
                 has_low_confidence_explicit = True
                 logger.info(f"Covered but explicit low confidence content found: {detection}")
         else:
